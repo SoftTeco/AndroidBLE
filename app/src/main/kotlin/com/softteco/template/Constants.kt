@@ -9,4 +9,11 @@ object Constants {
     const val CONTACT_SUBJECT = "User Inquiry or Feedback"
     const val TERMS_OF_SERVICES_URL = "https://softteco.com/terms-of-services"
     const val REQUEST_RETRY_DELAY = 5000L
+    const val START_INDEX_OF_TEMPERATURE = 0
+    const val END_INDEX_OF_TEMPERATURE = 2
+    const val INDEX_OF_HUMIDITY = 2
+    const val START_INDEX_OF_BATTERY = 3
+    const val END_INDEX_OF_BATTERY = 5
+    const val DIVISION_VALUE_OF_VALUES = 100
+    const val BIT_SHIFT_VALUE = 8
 }

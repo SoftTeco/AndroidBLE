@@ -24,6 +24,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -61,6 +62,7 @@ import com.patrykandpatrick.vico.core.common.shader.TopBottomShader
 import com.patrykandpatrick.vico.core.common.shape.Shape
 import com.softteco.template.R
 import com.softteco.template.data.deviceData.ThermometerData
+import com.softteco.template.data.deviceData.ThermometerValues
 import com.softteco.template.ui.components.DashboardValueBlock
 import com.softteco.template.ui.components.DeviceDashboardTopAppBar
 import com.softteco.template.ui.components.rememberMarker
@@ -68,6 +70,7 @@ import com.softteco.template.ui.feature.deviceDashboard.devices.thermometer.Ther
 import com.softteco.template.ui.theme.AppTheme
 import com.softteco.template.ui.theme.Dimens
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -82,15 +85,23 @@ fun ThermometerDashboardScreen(
     viewModel: ThermometerDashboardViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        viewModel.onDeviceResultCallback { macAddress ->
+            scope.launch {
+                viewModel.getThermometerValues(macAddress)
+            }
+        }
+    }
+
     ScreenContent(
         state,
-        updateCurrentTemperature = { viewModel.updateCurrentTemperature() },
-        updateCurrentHumidity = { viewModel.updateCurrentHumidity() },
-        updateThermometerHistory = { numElements, unit -> viewModel.updateThermometerHistory(numElements, unit) },
         toLocalDate = { viewModel.toLocalDate(it) },
         onSettingsClick = onSettingsClick,
         modifier = modifier,
         onBackClicked = onBackClicked,
+        updateUnit = { unit -> viewModel.unit = unit }
     )
 }
 
@@ -99,12 +110,10 @@ fun ThermometerDashboardScreen(
 private fun ScreenContent(
     state: ThermometerDashboardViewModel.State,
     onSettingsClick: (deviceId: String) -> Unit,
-    updateCurrentTemperature: () -> Unit,
-    updateCurrentHumidity: () -> Unit,
-    updateThermometerHistory: (numElements: Int, unit: TimeIntervalMenu) -> Unit,
-    toLocalDate: (values: Map<LocalDateTime, Float>) -> Map<LocalDate, Float>,
+    toLocalDate: (values: List<ThermometerValues>) -> Map<LocalDate, Double>,
     modifier: Modifier = Modifier,
     onBackClicked: () -> Unit,
+    updateUnit: (unit: TimeIntervalMenu) -> Unit
 ) {
     Column(
         modifier = modifier
@@ -116,7 +125,7 @@ private fun ScreenContent(
         var timeIntervalMenu by rememberSaveable { mutableStateOf(TimeIntervalMenu.Minute) }
         DeviceDashboardTopAppBar(
             state.thermometerData.deviceName,
-            onSettingsClick = { onSettingsClick(state.thermometerData.deviceId) },
+            onSettingsClick = { onSettingsClick(state.thermometerData.deviceId.toString()) },
             modifier = Modifier.fillMaxWidth(),
             onBackClicked = onBackClicked
         )
@@ -132,16 +141,14 @@ private fun ScreenContent(
                 valueName = stringResource(R.string.temperature),
                 measurementUnit = stringResource(R.string.degrees_celsius_icon),
                 icon = Icons.Filled.SevereCold,
-                modifier = Modifier.weight(1f),
-                onClick = updateCurrentTemperature
+                modifier = Modifier.weight(1f)
             )
             DashboardValueBlock(
                 value = state.thermometerData.currentHumidity,
                 valueName = stringResource(R.string.humidity),
                 measurementUnit = stringResource(R.string.percent_icon),
                 icon = Icons.Outlined.WaterDrop,
-                modifier = Modifier.weight(1f),
-                onClick = updateCurrentHumidity
+                modifier = Modifier.weight(1f)
             )
         }
         Row(
@@ -159,9 +166,12 @@ private fun ScreenContent(
                         selected = timeIntervalMenu == segmentUIFramework,
                         onClick = {
                             timeIntervalMenu = segmentUIFramework
-                            updateThermometerHistory(NUM_HISTORY_ELEMENTS, timeIntervalMenu)
+                            updateUnit(timeIntervalMenu)
                         },
-                        shape = SegmentedButtonDefaults.itemShape(index, TimeIntervalMenu.entries.size),
+                        shape = SegmentedButtonDefaults.itemShape(
+                            index,
+                            TimeIntervalMenu.entries.size
+                        ),
                     ) {
                         Text(stringResource(segmentUIFramework.labelResourceID))
                     }
@@ -180,13 +190,18 @@ private fun ScreenContent(
                     timeIntervalMenu.chronoUnit == ChronoUnit.HOURS
                 ) {
                     SetGraphData(
-                        values = state.thermometerData.temperatureHistory,
+                        values = state.thermometerData.valuesHistory
+                            .map {
+                                (it as ThermometerValues.DataLYWSD03MMC).let {
+                                    it.timestamp to it.temperature
+                                }
+                            }.toMap(),
                         bottomAxisValueFormatter = state.bottomAxisValueFormatter,
                         timeUnit = timeIntervalMenu.chronoUnit
                     )
                 } else {
                     SetGraphData(
-                        values = toLocalDate(state.thermometerData.temperatureHistory),
+                        values = toLocalDate(state.thermometerData.valuesHistory),
                         bottomAxisValueFormatter = state.bottomAxisValueFormatter,
                         timeUnit = timeIntervalMenu.chronoUnit
                     )
@@ -198,7 +213,7 @@ private fun ScreenContent(
 
 @Composable
 private fun <T> SetGraphData(
-    values: Map<T, Float>,
+    values: Map<T, Double>,
     bottomAxisValueFormatter: CartesianValueFormatter,
     timeUnit: ChronoUnit,
     modifier: Modifier = Modifier,
@@ -214,9 +229,12 @@ private fun <T> SetGraphData(
             val xToDates = values.keys.associateBy {
                 when (timeUnit) {
                     ChronoUnit.MINUTES, ChronoUnit.HOURS ->
-                        timeUnit.between(minDateTime as LocalDateTime, it as LocalDateTime).toFloat()
+                        timeUnit.between(minDateTime as LocalDateTime, it as LocalDateTime)
+                            .toFloat()
+
                     ChronoUnit.DAYS, ChronoUnit.MONTHS ->
                         timeUnit.between(minDateTime as LocalDate, it as LocalDate).toFloat()
+
                     else -> 0f
                 }
             }
@@ -227,15 +245,17 @@ private fun <T> SetGraphData(
                     when (timeUnit) {
                         ChronoUnit.MINUTES, ChronoUnit.HOURS ->
                             it[xToDateMapKeyLocalDateTime] = xToDates as Map<Float, LocalDateTime>
+
                         ChronoUnit.DAYS, ChronoUnit.MONTHS ->
                             it[xToDateMapKeyLocalDate] = xToDates as Map<Float, LocalDate>
+
                         else -> {}
                     }
                 }
             }
         }
     }
-
+    
     Graph(modelProducer, bottomAxisValueFormatter, modifier)
 }
 
@@ -270,7 +290,12 @@ private fun Graph(
                                         margins = Dimensions.of(1.dp),
                                     ),
                                 ),
-                                DynamicShader.verticalGradient(arrayOf(Color.Black, Color.Transparent)),
+                                DynamicShader.verticalGradient(
+                                    arrayOf(
+                                        Color.Black,
+                                        Color.Transparent
+                                    )
+                                ),
                                 PorterDuff.Mode.DST_IN,
                             ),
                             DynamicShader.compose(
@@ -284,7 +309,12 @@ private fun Graph(
                                     ),
                                     checkeredArrangement = false,
                                 ),
-                                DynamicShader.verticalGradient(arrayOf(Color.Transparent, Color.Black)),
+                                DynamicShader.verticalGradient(
+                                    arrayOf(
+                                        Color.Transparent,
+                                        Color.Black
+                                    )
+                                ),
                                 PorterDuff.Mode.DST_IN,
                             ),
                         ),
@@ -312,7 +342,13 @@ private fun Graph(
                 rememberLineComponent(
                     color = MaterialTheme.colorScheme.outlineVariant,
                     shape =
-                    remember { Shape.dashed(shape = Shape.Pill, dashLength = 4.dp, gapLength = 8.dp) },
+                    remember {
+                        Shape.dashed(
+                            shape = Shape.Pill,
+                            dashLength = 4.dp,
+                            gapLength = 8.dp
+                        )
+                    },
                 ),
                 itemPlacer = remember { AxisItemPlacer.Vertical.count(count = { ITEM_PLACER_COUNT }) },
             ),
@@ -340,12 +376,10 @@ private fun Preview() {
     AppTheme {
         ScreenContent(
             state = ThermometerDashboardViewModel.State(thermometerData = ThermometerData()),
-            updateCurrentTemperature = {},
-            updateCurrentHumidity = {},
             onSettingsClick = {},
-            updateThermometerHistory = { _, _ -> },
             toLocalDate = { emptyMap() },
             onBackClicked = {},
+            updateUnit = {}
         )
     }
 }

@@ -7,7 +7,10 @@ import androidx.lifecycle.viewModelScope
 import com.patrykandpatrick.vico.core.cartesian.data.CartesianValueFormatter
 import com.patrykandpatrick.vico.core.common.data.ExtraStore
 import com.softteco.template.R
+import com.softteco.template.data.bluetooth.BluetoothHelper
+import com.softteco.template.data.bluetooth.usecase.ThermometerDataGetUseCase
 import com.softteco.template.data.deviceData.ThermometerData
+import com.softteco.template.data.deviceData.ThermometerValues
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -19,50 +22,45 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 import javax.inject.Inject
-import kotlin.random.Random
 
-private const val MIN_TEMPERATURE = -20
-private const val MIN_HUMIDITY = 10
-private const val MAX_TEMPERATURE = 45
-private const val MAX_HUMIDITY = 99
-const val NUM_HISTORY_ELEMENTS = 500
 val xToDateMapKeyLocalDateTime = ExtraStore.Key<Map<Float, LocalDateTime>>()
 val xToDateMapKeyLocalDate = ExtraStore.Key<Map<Float, LocalDate>>()
 const val ITEM_PLACER_COUNT = 4
 
 @HiltViewModel
-class ThermometerDashboardViewModel @Inject constructor() : ViewModel() {
+class ThermometerDashboardViewModel @Inject constructor(
+    private val bluetoothHelper: BluetoothHelper,
+    private val thermometerDataGetUseCase: ThermometerDataGetUseCase,
+) :
+    ViewModel() {
 
     private val thermometerData = MutableStateFlow(
-        ThermometerData(
-            "111",
-            "Main thermometer",
-            generateRandomTemperature(),
-            generateRandomHumidity(),
-            generateRandomThermometerHistory(NUM_HISTORY_ELEMENTS, ChronoUnit.MINUTES)
-        )
+        ThermometerData()
     )
+
+    var unit = TimeIntervalMenu.Minute
 
     private val bottomAxisValueFormatter = MutableStateFlow(
         CartesianValueFormatter { x, chartValues, _ ->
             (
-                chartValues.model.extraStore[xToDateMapKeyLocalDateTime][x] ?: LocalDateTime.ofEpochSecond(
-                    x.toLong(),
-                    0,
-                    ZoneOffset.UTC
-                )
-                )
+                    chartValues.model.extraStore[xToDateMapKeyLocalDateTime][x]
+                        ?: LocalDateTime.ofEpochSecond(
+                            x.toLong(),
+                            0,
+                            ZoneOffset.UTC
+                        )
+                    )
                 .format(TimeIntervalMenu.Minute.dateTimeFormatter)
         }
     )
 
     val state = combine(
         thermometerData,
-        bottomAxisValueFormatter,
+        bottomAxisValueFormatter
     ) { data, formatter ->
         State(
             thermometerData = data,
-            bottomAxisValueFormatter = formatter,
+            bottomAxisValueFormatter = formatter
         )
     }.stateIn(
         viewModelScope,
@@ -70,70 +68,55 @@ class ThermometerDashboardViewModel @Inject constructor() : ViewModel() {
         State()
     )
 
-    private fun generateRandomTemperature() = Random.nextInt(MIN_TEMPERATURE, MAX_TEMPERATURE).toFloat()
-
-    private fun generateRandomHumidity() = Random.nextInt(MIN_HUMIDITY, MAX_HUMIDITY)
-
-    private fun generateRandomThermometerHistory(numElements: Int, unit: ChronoUnit): Map<LocalDateTime, Float> {
-        val startDateTime = LocalDateTime.now().minus(numElements.toLong() - 1, unit)
-        return (0 until numElements).associate { i ->
-            startDateTime.plus(i.toLong(), unit) to generateRandomTemperature()
-        }
-    }
-
-    fun toLocalDate(values: Map<LocalDateTime, Float>): Map<LocalDate, Float> {
-        return values.entries
-            .groupBy { it.key.toLocalDate() }
+    fun toLocalDate(values: List<ThermometerValues>): Map<LocalDate, Double> {
+        return values
+            .groupBy { (it as ThermometerValues.DataLYWSD03MMC).timestamp.toLocalDate() }
             .mapValues { (_, entries) ->
-                entries.map { it.value }.average().toFloat()
+                entries.map { (it as ThermometerValues.DataLYWSD03MMC).temperature }.average()
             }
     }
 
-    fun updateThermometerHistory(numElements: Int, unit: TimeIntervalMenu) {
-        val newTemperatureHistory = generateRandomThermometerHistory(numElements, unit.chronoUnit)
+    fun onDeviceResultCallback(onDeviceResult: (macAddress: String) -> Unit) {
+        bluetoothHelper.onDeviceResultCallback(onDeviceResult)
+    }
 
-        val updatedThermometerData = thermometerData.value.copy(
-            temperatureHistory = newTemperatureHistory
-        )
+    fun getThermometerValues(macAddress: String) {
+        thermometerData.value =
+            thermometerDataGetUseCase.execute(macAddress).let { thermometerDataDb ->
+                thermometerDataDb.toEntity().let { thermometerData ->
+                    val lastElement =
+                        thermometerData.valuesHistory.groupBy { (it as ThermometerValues.DataLYWSD03MMC).timestamp }.values.map {
+                            it.map { it as ThermometerValues.DataLYWSD03MMC }
+                                .maxBy(ThermometerValues.DataLYWSD03MMC::timestamp)
+                        }.last()
+                    thermometerData.currentTemperature = lastElement.temperature
+                    thermometerData.currentHumidity = lastElement.humidity
+                    thermometerData
+                }
+            }.also {
+                updateThermometerHistory() }
+    }
 
+    private fun updateThermometerHistory() {
         if (unit == TimeIntervalMenu.Minute || unit == TimeIntervalMenu.Hour) {
             bottomAxisValueFormatter.value = CartesianValueFormatter { x, chartValues, _ ->
                 (
-                    chartValues.model.extraStore[xToDateMapKeyLocalDateTime][x] ?: LocalDateTime.ofEpochSecond(
-                        x.toLong(),
-                        0,
-                        ZoneOffset.UTC
-                    )
-                    )
+                        chartValues.model.extraStore[xToDateMapKeyLocalDateTime][x]
+                            ?: LocalDateTime.ofEpochSecond(
+                                x.toLong(),
+                                0,
+                                ZoneOffset.UTC
+                            )
+                        )
                     .format(unit.dateTimeFormatter)
             }
         } else {
             bottomAxisValueFormatter.value = CartesianValueFormatter { x, chartValues, _ ->
-                (chartValues.model.extraStore[xToDateMapKeyLocalDate][x] ?: LocalDate.ofEpochDay(x.toLong()))
+                (chartValues.model.extraStore[xToDateMapKeyLocalDate][x]
+                    ?: LocalDate.ofEpochDay(x.toLong()))
                     .format(unit.dateTimeFormatter)
             }
         }
-
-        thermometerData.value = updatedThermometerData
-    }
-    fun updateCurrentTemperature() {
-        val newCurrentTemperature = generateRandomTemperature()
-
-        val updatedThermometerData = thermometerData.value.copy(
-            currentTemperature = newCurrentTemperature
-        )
-
-        thermometerData.value = updatedThermometerData
-    }
-
-    fun updateCurrentHumidity() {
-        val newCurrentHumidity = generateRandomHumidity()
-
-        val updatedThermometerData = thermometerData.value.copy(
-            currentHumidity = newCurrentHumidity
-        )
-
-        thermometerData.value = updatedThermometerData
     }
 
     @Immutable
@@ -141,12 +124,13 @@ class ThermometerDashboardViewModel @Inject constructor() : ViewModel() {
         val thermometerData: ThermometerData = ThermometerData(),
         val bottomAxisValueFormatter: CartesianValueFormatter = CartesianValueFormatter { x, chartValues, _ ->
             (
-                chartValues.model.extraStore[xToDateMapKeyLocalDateTime][x] ?: LocalDateTime.ofEpochSecond(
-                    x.toLong(),
-                    0,
-                    ZoneOffset.UTC
-                )
-                )
+                    chartValues.model.extraStore[xToDateMapKeyLocalDateTime][x]
+                        ?: LocalDateTime.ofEpochSecond(
+                            x.toLong(),
+                            0,
+                            ZoneOffset.UTC
+                        )
+                    )
                 .format(TimeIntervalMenu.Day.dateTimeFormatter)
         }
     )

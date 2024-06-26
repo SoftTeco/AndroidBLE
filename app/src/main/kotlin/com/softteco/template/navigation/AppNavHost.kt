@@ -22,6 +22,7 @@ import com.softteco.template.navigation.AppNavHost.DEEP_LINK_URI
 import com.softteco.template.navigation.AppNavHost.DEVICE_ID_KEY
 import com.softteco.template.navigation.AppNavHost.RESET_PASSWORD_PATH
 import com.softteco.template.navigation.AppNavHost.RESET_TOKEN_ARG
+import com.softteco.template.ui.feature.bluetooth.BluetoothScreen
 import com.softteco.template.ui.feature.deviceDashboard.deviceSettings.DeviceSettingsScreen
 import com.softteco.template.ui.feature.deviceDashboard.devices.robotVacuum.RobotVacuumDashboardScreen
 import com.softteco.template.ui.feature.deviceDashboard.devices.thermometer.ThermometerDashboardScreen
@@ -203,7 +204,7 @@ fun NavGraphBuilder.homeGraph(navController: NavController, modifier: Modifier =
             ManualSelectionScreen(
                 onBackClicked = { navController.navigateUp() },
                 onSearchClick = { navController.navigate(Screen.SearchDevice.route) },
-                onDeviceClick = { /*TODO*/ },
+                onDeviceClick = { navController.navigate(Screen.Bluetooth.route) },
                 modifier
             )
         }
@@ -220,6 +221,12 @@ fun NavGraphBuilder.homeGraph(navController: NavController, modifier: Modifier =
         }
         composable(Screen.Notifications.route) {
             NotificationsScreen(onBackClicked = { navController.navigateUp() }, modifier)
+        }
+        composable(Screen.Bluetooth.route) {
+            BluetoothScreen(
+                modifier = modifier,
+                onOpenDashboard = { navController.navigate(Screen.ThermometerDashboard.route) }
+            )
         }
         composable(
             route = Screen.ThermometerDashboard.route,

@@ -25,12 +25,10 @@ fun <T> DashboardValueBlock(
     valueName: String,
     measurementUnit: String,
     icon: ImageVector,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
+    modifier: Modifier = Modifier
 ) {
     ElevatedCard(
-        modifier = modifier.padding(horizontal = Dimens.PaddingSmall),
-        onClick = onClick
+        modifier = modifier.padding(horizontal = Dimens.PaddingSmall)
     ) {
         Column(
             horizontalAlignment = Alignment.Start,
